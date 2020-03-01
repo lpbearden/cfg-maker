@@ -2,9 +2,25 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
+	"io/ioutil"
+	"log"
+	"net/http"
 	"os"
+
+	"github.com/tidwall/gjson"
 )
+
+func generateHeader(name string) string {
+	return fmt.Sprintf(`
+
+//------------------------------------------------
+//                                              
+//                   %s
+//                                              
+//------------------------------------------------`, name)
+}
 
 func buybindGen(key string, item string) string {
 	return fmt.Sprintf(
@@ -41,18 +57,54 @@ func check(e error) {
 	}
 }
 
+func generateAutoexec(w http.ResponseWriter, req *http.Request) {
+	body, err := ioutil.ReadAll(req.Body)
+	check(err)
+	rdr1 := ioutil.NopCloser(bytes.NewBuffer(body))
+	rdr2 := ioutil.NopCloser(bytes.NewBuffer(body))
+
+	log.Printf("BODY: %q", rdr1)
+	req.Body = rdr2
+}
+
 func main() {
-	fmt.Println("generating keybinds")
-	autoexec := buybindGen("kp_slash", "ump45") + dropbindGen("l") + jumpbindGen("capslock")
+	var autoexec string
 
 	f, err := os.Create("/tmp/autoexec.cfg")
 	check(err)
-
 	defer f.Close()
 
 	w := bufio.NewWriter(f)
-	n4, err := w.WriteString(autoexec)
-	fmt.Printf("wrote %d bytes\n", n4)
+	w.WriteString(autoexec)
 
+	srcJSON := `{"binds": {"buybinds": {"ump45": "kp_slash"},"miscbinds": {"use weapon_c4": "c","use weapon_c4;drop": "z","drop": "l","jumpthrow": "capslock"}}}`
+
+	miscbinds := gjson.Get(srcJSON, "binds.miscbinds").Map()
+	buybinds := gjson.Get(srcJSON, "binds.buybinds").Map()
+
+	autoexec += generateHeader("Misc Binds")
+	for k, v := range miscbinds {
+		var tmp string
+		switch k {
+		case "jumpthrow":
+			tmp = jumpbindGen(v.String())
+		case "drop":
+			tmp = dropbindGen(v.String())
+		default:
+			tmp = keybindGen(v.String(), k)
+		}
+		autoexec += tmp
+	}
+
+	autoexec += generateHeader("Buybinds")
+	for k, v := range buybinds {
+		autoexec += buybindGen(v.String(), k)
+	}
+
+	w.WriteString(autoexec)
+	w.WriteString(fmt.Sprintf("\n\n\n\necho \"Autoexec.cfg loaded\" \nhost_writeconfig"))
 	w.Flush()
+
+	http.HandleFunc("/generateAutoexec", generateAutoexec)
+	http.ListenAndServe(":8081", nil)
 }
